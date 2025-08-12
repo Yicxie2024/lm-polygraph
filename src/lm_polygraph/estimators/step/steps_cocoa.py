@@ -4,10 +4,9 @@ from typing import Dict
 from ..estimator import Estimator
 
 
-# TODO: estimate's name need to be changed --> StepsCocoaMSE
-class StepsCocoaMTE(Estimator):
+class StepsCocoaMSE(Estimator):
     """
-    Step-wise version of CocoaMTE (Cocoa Mean Token Entropy) estimator.
+    Step-wise version of CocoaMSE (Cocoa Mean Sequence Entropy) estimator.
 
     This estimator combines step-wise entropy with step-wise semantic similarity
     to provide enhanced uncertainty estimation at the step level.
@@ -17,7 +16,8 @@ class StepsCocoaMTE(Estimator):
     - StepsCrossEncoderSimilarityCalculator (steps_sample_sentence_similarity)
     """
 
-    def __init__(self, similarity_key: str = "steps_greedy_sentence_similarity"):
+    def __init__(self, similarity_key: str = "steps_greedy_sentence_similarity", 
+                 similarity_stat: str = "mean"):
         """
         Initialize the estimator.
 
@@ -25,12 +25,17 @@ class StepsCocoaMTE(Estimator):
             similarity_key: Key for similarity data in stats. Options:
                 - "steps_greedy_sentence_similarity" (from StepsGreedySimilarityCalculator)
                 - "steps_sample_sentence_similarity" (from StepsCrossEncoderSimilarityCalculator)
+            similarity_stat: Statistic to use for steps_sample_sentence_similarity. Options:
+                - "mean": Use mean of off-diagonal similarities
+                - "std": Use standard deviation of off-diagonal similarities  
+                - "max": Use maximum of off-diagonal similarities
         """
         self.similarity_key = similarity_key
+        self.similarity_stat = similarity_stat
         super().__init__([similarity_key, "steps_entropy"], "sequence")
 
     def __str__(self):
-        return f"StepsCocoaMTE({self.similarity_key})"
+        return f"StepsCocoaMSE({self.similarity_key}, {self.similarity_stat})"
 
     def _normalize_similarity_data(self, similarity_data) -> list:
         """
@@ -52,19 +57,30 @@ class StepsCocoaMTE(Estimator):
 
         elif self.similarity_key == "steps_sample_sentence_similarity":
             # Format: [batch_size][n_steps] where each element is (n_samples, n_samples) matrix
-            # Need to extract greedy-to-sample similarities
+            # Need to extract statistics from off-diagonal similarities
             normalized_data = []
 
             for batch_item in similarity_data:  # Each batch
                 batch_steps = []
                 for step_matrix in batch_item:  # Each step's similarity matrix
-                    # Assume the first row contains greedy-to-sample similarities
-                    # Or take the diagonal if it's self-similarity
-                    # For now, take the mean of the first row (excluding self-similarity)
                     if step_matrix.shape[0] > 1:
-                        # Take first row (greedy vs all samples), excluding diagonal
-                        greedy_similarities = step_matrix[0, :]
-                        batch_steps.append(greedy_similarities.tolist())
+                        # Exclude diagonal values (1.0) and compute statistics
+                        mask = ~np.eye(step_matrix.shape[0], dtype=bool)
+                        off_diagonal_similarities = step_matrix[mask]
+                        
+                        if self.similarity_stat == "mean":
+                            stat_value = np.mean(off_diagonal_similarities)
+                        elif self.similarity_stat == "std":
+                            stat_value = np.std(off_diagonal_similarities)
+                        elif self.similarity_stat == "max":
+                            stat_value = np.max(off_diagonal_similarities)
+                        else:
+                            raise ValueError(f"Unsupported similarity_stat: {self.similarity_stat}")
+                        
+                        # Create a list with the same length as n_samples, filled with the statistic
+                        # This maintains the expected shape [n_samples]
+                        n_samples = step_matrix.shape[0]
+                        batch_steps.append([stat_value] * n_samples)
                     else:
                         # Single sample case
                         batch_steps.append([step_matrix[0, 0]])
@@ -143,7 +159,8 @@ class StepsCocoaSEE(Estimator):
     passed as a separate parameter, not as a statistic.
     """
 
-    def __init__(self, similarity_key: str = "steps_greedy_sentence_similarity"):
+    def __init__(self, similarity_key: str = "steps_greedy_sentence_similarity",
+                 similarity_stat: str = "mean"):
         """
         Initialize the estimator.
 
@@ -151,12 +168,17 @@ class StepsCocoaSEE(Estimator):
             similarity_key: Key for similarity data in stats. Options:
                 - "steps_greedy_sentence_similarity" (from StepsGreedySimilarityCalculator)
                 - "steps_sample_sentence_similarity" (from StepsCrossEncoderSimilarityCalculator)
+            similarity_stat: Statistic to use for steps_sample_sentence_similarity. Options:
+                - "mean": Use mean of off-diagonal similarities
+                - "std": Use standard deviation of off-diagonal similarities  
+                - "max": Use maximum of off-diagonal similarities
         """
         self.similarity_key = similarity_key
+        self.similarity_stat = similarity_stat
         super().__init__([similarity_key], "sequence")
 
     def __str__(self):
-        return f"StepsCocoaSEE({self.similarity_key})"
+        return f"StepsCocoaSEE({self.similarity_key}, {self.similarity_stat})"
 
     def _normalize_similarity_data(self, similarity_data) -> list:
         """
@@ -175,8 +197,22 @@ class StepsCocoaSEE(Estimator):
                 batch_steps = []
                 for step_matrix in batch_item:
                     if step_matrix.shape[0] > 1:
-                        greedy_similarities = step_matrix[0, :]
-                        batch_steps.append(greedy_similarities.tolist())
+                        # Exclude diagonal values (1.0) and compute statistics
+                        mask = ~np.eye(step_matrix.shape[0], dtype=bool)
+                        off_diagonal_similarities = step_matrix[mask]
+                        
+                        if self.similarity_stat == "mean":
+                            stat_value = np.mean(off_diagonal_similarities)
+                        elif self.similarity_stat == "std":
+                            stat_value = np.std(off_diagonal_similarities)
+                        elif self.similarity_stat == "max":
+                            stat_value = np.max(off_diagonal_similarities)
+                        else:
+                            raise ValueError(f"Unsupported similarity_stat: {self.similarity_stat}")
+                        
+                        # Create a list with the same length as n_samples
+                        n_samples = step_matrix.shape[0]
+                        batch_steps.append([stat_value] * n_samples)
                     else:
                         batch_steps.append([step_matrix[0, 0]])
                 normalized_data.append(batch_steps)
@@ -252,18 +288,24 @@ class StepsCocoaMSP(Estimator):
     Supports multiple similarity calculators.
     """
 
-    def __init__(self, similarity_key: str = "steps_greedy_sentence_similarity"):
+    def __init__(self, similarity_key: str = "steps_greedy_sentence_similarity",
+                 similarity_stat: str = "mean"):
         """
         Initialize the estimator.
 
         Args:
             similarity_key: Key for similarity data in stats.
+            similarity_stat: Statistic to use for steps_sample_sentence_similarity. Options:
+                - "mean": Use mean of off-diagonal similarities
+                - "std": Use standard deviation of off-diagonal similarities  
+                - "max": Use maximum of off-diagonal similarities
         """
         self.similarity_key = similarity_key
+        self.similarity_stat = similarity_stat
         super().__init__([similarity_key, "sample_steps_log_likelihoods"], "sequence")
 
     def __str__(self):
-        return f"StepsCocoaMSP({self.similarity_key})"
+        return f"StepsCocoaMSP({self.similarity_key}, {self.similarity_stat})"
 
     def _normalize_similarity_data(self, similarity_data) -> list:
         """Normalize similarity data to standard format."""
@@ -277,8 +319,22 @@ class StepsCocoaMSP(Estimator):
                 batch_steps = []
                 for step_matrix in batch_item:
                     if step_matrix.shape[0] > 1:
-                        greedy_similarities = step_matrix[0, :]
-                        batch_steps.append(greedy_similarities.tolist())
+                        # Exclude diagonal values (1.0) and compute statistics
+                        mask = ~np.eye(step_matrix.shape[0], dtype=bool)
+                        off_diagonal_similarities = step_matrix[mask]
+                        
+                        if self.similarity_stat == "mean":
+                            stat_value = np.mean(off_diagonal_similarities)
+                        elif self.similarity_stat == "std":
+                            stat_value = np.std(off_diagonal_similarities)
+                        elif self.similarity_stat == "max":
+                            stat_value = np.max(off_diagonal_similarities)
+                        else:
+                            raise ValueError(f"Unsupported similarity_stat: {self.similarity_stat}")
+                        
+                        # Create a list with the same length as n_samples
+                        n_samples = step_matrix.shape[0]
+                        batch_steps.append([stat_value] * n_samples)
                     else:
                         batch_steps.append([step_matrix[0, 0]])
                 normalized_data.append(batch_steps)
@@ -344,18 +400,24 @@ class StepsCocoaPPL(Estimator):
     Supports multiple similarity calculators.
     """
 
-    def __init__(self, similarity_key: str = "steps_greedy_sentence_similarity"):
+    def __init__(self, similarity_key: str = "steps_greedy_sentence_similarity",
+                 similarity_stat: str = "mean"):
         """
         Initialize the estimator.
 
         Args:
             similarity_key: Key for similarity data in stats.
+            similarity_stat: Statistic to use for steps_sample_sentence_similarity. Options:
+                - "mean": Use mean of off-diagonal similarities
+                - "std": Use standard deviation of off-diagonal similarities  
+                - "max": Use maximum of off-diagonal similarities
         """
         self.similarity_key = similarity_key
+        self.similarity_stat = similarity_stat
         super().__init__([similarity_key, "sample_steps_log_likelihoods"], "sequence")
 
     def __str__(self):
-        return f"StepsCocoaPPL({self.similarity_key})"
+        return f"StepsCocoaPPL({self.similarity_key}, {self.similarity_stat})"
 
     def _normalize_similarity_data(self, similarity_data) -> list:
         """Normalize similarity data to standard format."""
@@ -369,8 +431,22 @@ class StepsCocoaPPL(Estimator):
                 batch_steps = []
                 for step_matrix in batch_item:
                     if step_matrix.shape[0] > 1:
-                        greedy_similarities = step_matrix[0, :]
-                        batch_steps.append(greedy_similarities.tolist())
+                        # Exclude diagonal values (1.0) and compute statistics
+                        mask = ~np.eye(step_matrix.shape[0], dtype=bool)
+                        off_diagonal_similarities = step_matrix[mask]
+                        
+                        if self.similarity_stat == "mean":
+                            stat_value = np.mean(off_diagonal_similarities)
+                        elif self.similarity_stat == "std":
+                            stat_value = np.std(off_diagonal_similarities)
+                        elif self.similarity_stat == "max":
+                            stat_value = np.max(off_diagonal_similarities)
+                        else:
+                            raise ValueError(f"Unsupported similarity_stat: {self.similarity_stat}")
+                        
+                        # Create a list with the same length as n_samples
+                        n_samples = step_matrix.shape[0]
+                        batch_steps.append([stat_value] * n_samples)
                     else:
                         batch_steps.append([step_matrix[0, 0]])
                 normalized_data.append(batch_steps)
@@ -423,4 +499,4 @@ class StepsCocoaPPL(Estimator):
 
             enriched_ppl.append(np.array(sample_enhanced_ppl))
 
-        return enriched_ppl
+        return enriched_ppl 

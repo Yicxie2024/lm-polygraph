@@ -46,7 +46,7 @@ from lm_polygraph.stat_calculators.step.stepwise_sampling import (
 from lm_polygraph.stat_calculators.step.steps_entropy import StepsEntropyCalculator
 from lm_polygraph.estimators.step.steps_cocoa import (
     StepsCocoaSEE,
-    StepsCocoaMTE,
+    StepsCocoaMSE,
     StepsCocoaMSP,
     StepsCocoaPPL,
 )
@@ -172,7 +172,8 @@ def main(args):
     if args.finetuned_deberta_path:
         state_dict = torch.load(args.finetuned_deberta_path)
         nli_model._deberta.load_state_dict(state_dict)
-
+        
+    """
     skip_starts = (
         ["<|im_start|>think"]
         if model.model_path == "simplescaling/s1.1-7B"
@@ -187,10 +188,11 @@ def main(args):
             "\\]",
         ]
     )
-
+    """
+    
     stat_calculators: list[StatCalculator] = [
         GreedyProbsCalculator(),
-        StepsExtractor(skip_starts=skip_starts),
+        StepsExtractor(),
         StepwiseSamplingCalculator(candidates_per_step=args.n_samples, temperature=0.6),
         StepsSemanticMatrixCalculator(nli_model),
         StepsGreedySimilarityCalculator(),
@@ -201,23 +203,30 @@ def main(args):
 
     estimators: list[Estimator] = [
         StepsSemanticEntropy(),
-        StepsCocoaMTE(similarity_key="steps_sample_sentence_similarity"),
-        StepsCocoaMTE(similarity_key="steps_greedy_sentence_similarity"),
-        StepsCocoaMSP(similarity_key="steps_sample_sentence_similarity"),
+        StepsCocoaMSE(similarity_key="steps_sample_sentence_similarity", similarity_stat="mean"),
+        StepsCocoaMSE(similarity_key="steps_sample_sentence_similarity", similarity_stat="std"),
+        StepsCocoaMSE(similarity_key="steps_sample_sentence_similarity", similarity_stat="max"),
+        StepsCocoaMSE(similarity_key="steps_greedy_sentence_similarity"),
+        StepsCocoaMSP(similarity_key="steps_sample_sentence_similarity", similarity_stat="mean"),
+        StepsCocoaMSP(similarity_key="steps_sample_sentence_similarity", similarity_stat="std"),
+        StepsCocoaMSP(similarity_key="steps_sample_sentence_similarity", similarity_stat="max"),
         StepsCocoaMSP(similarity_key="steps_greedy_sentence_similarity"),
-        StepsCocoaPPL(similarity_key="steps_sample_sentence_similarity"),
+        StepsCocoaPPL(similarity_key="steps_sample_sentence_similarity", similarity_stat="mean"),
+        StepsCocoaPPL(similarity_key="steps_sample_sentence_similarity", similarity_stat="std"),
+        StepsCocoaPPL(similarity_key="steps_sample_sentence_similarity", similarity_stat="max"),
         StepsCocoaPPL(similarity_key="steps_greedy_sentence_similarity"),
     ]
     special_estimators: list[Estimator] = [
+        StepsCocoaSEE(similarity_key="steps_sample_sentence_similarity", similarity_stat="mean"),
+        StepsCocoaSEE(similarity_key="steps_sample_sentence_similarity", similarity_stat="std"),
+        StepsCocoaSEE(similarity_key="steps_sample_sentence_similarity", similarity_stat="max"),
         StepsCocoaSEE(similarity_key="steps_greedy_sentence_similarity"),
-        StepsCocoaSEE(similarity_key="steps_sample_sentence_similarity"),
     ]
     man: dict = {
         "stats": [],
         "estimates": [],
     }
-    steps_cocoa_see_greedy_name = str(StepsCocoaSEE(similarity_key="steps_greedy_sentence_similarity"))
-    steps_cocoa_see_sample_name = str(StepsCocoaSEE(similarity_key="steps_sample_sentence_similarity"))
+    
     if os.path.exists(args.save_path):
         man = torch.load(args.save_path)
     for i, (input_texts, target_texts) in enumerate(data):
@@ -271,7 +280,8 @@ def main(args):
             print(f"Estimating {name}...")
             start_time = time.time()
 
-            if name == steps_cocoa_see_greedy_name or name == steps_cocoa_see_sample_name:
+            # in name starts with StepsCocoaSEE, we need to pass in the semantic entropy output
+            if name.startswith("StepsCocoaSEE"):
                 # StepsCocoaSEE needs StepsSemanticEntropy output
                 semantic_entropy_output = estimates.get("StepsSemanticEntropy", None)
                 if semantic_entropy_output is None:
